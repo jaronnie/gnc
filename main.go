@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
@@ -20,6 +21,8 @@ var (
 	ProtocolPorts []string
 	LifeCycleTime int // second
 	IsListen      bool
+	IP            string
+	V             bool
 )
 
 type ProtocolPort struct {
@@ -49,6 +52,46 @@ func main() {
 		})
 	}
 
+	if !IsListen {
+		// client to request
+		reduce, _ := mapreduce.MapReduce(func(source chan<- interface{}) {
+			for _, v := range checkPorts {
+				source <- v
+			}
+		}, func(item interface{}, writer mapreduce.Writer, cancel func(error)) {
+			v := item.(ProtocolPort)
+			switch v.Protocol {
+			case "tcp":
+				resp, err := http.Get(fmt.Sprintf("http://%s:%d", IP, v.Port))
+				if err != nil {
+					writer.Write(fmt.Sprintf("%s:%d", IP, v.Port))
+					return
+				}
+				all, err := ioutil.ReadAll(resp.Body)
+				if err != nil {
+					writer.Write(fmt.Sprintf("%s:%d", IP, v.Port))
+					return
+				}
+				_ = resp.Body.Close()
+				if V {
+					fmt.Println(string(all))
+				}
+			case "udp":
+				// todo
+			}
+		}, func(pipe <-chan interface{}, writer mapreduce.Writer, cancel func(error)) {
+			var errAddr []string
+			for v := range pipe {
+				errAddr = append(errAddr, v.(string))
+			}
+			writer.Write(errAddr)
+		})
+		if len(reduce.([]string)) != 0 {
+			fmt.Printf("err addr: %s", strings.Join(reduce.([]string), ","))
+		}
+		return
+	}
+
 	var conflictPorts []string
 	var listeners []Listener
 
@@ -63,9 +106,9 @@ func main() {
 		var err error
 		switch v.Protocol {
 		case "tcp":
-			listener, err = net.Listen("tcp", fmt.Sprintf(":%d", v.Port))
+			listener, err = net.Listen("tcp", fmt.Sprintf("%s:%d", IP, v.Port))
 		case "udp":
-			addr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("0.0.0.0:%d", v.Port))
+			addr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", IP, v.Port))
 			listener, err = net.ListenUDP("udp", addr)
 			if err != nil {
 				fmt.Println(err)
@@ -101,8 +144,7 @@ func main() {
 			}
 		}
 		fmt.Printf("conflict ports: %s", strings.Join(conflictPorts, ","))
-		return
-	} else if !IsListen {
+		os.Exit(1)
 		return
 	}
 
@@ -125,14 +167,18 @@ func main() {
 						return
 					}
 					strData := string(data)
-					fmt.Print("Received:", strData)
+					if V {
+						fmt.Print("Received:", strData)
+					}
 
 					_, err = v.Listener.(*net.UDPConn).WriteToUDP([]byte(strData), rAddr)
 					if err != nil {
 						sig <- syscall.SIGQUIT
 						return
 					}
-					fmt.Print("Send:", strData)
+					if V {
+						fmt.Print("Send:", strData)
+					}
 				}
 			}
 		}()
@@ -194,7 +240,9 @@ func signalHandler(listeners []Listener, sig chan os.Signal) {
 func bindFlags() {
 	pflag.StringSliceVarP(&ProtocolPorts, "ports", "p", nil, "set ports to pre check, default protocol is tcp")
 	pflag.IntVarP(&LifeCycleTime, "lifecycle-time", "t", 0, "set listen lifecycle time when listen")
+	pflag.StringVarP(&IP, "ip", "", "0.0.0.0", "set ip")
 	pflag.BoolVarP(&IsListen, "listen", "l", false, "is listen")
+	pflag.BoolVarP(&V, "", "v", false, "show info")
 
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
 	pflag.Parse()
