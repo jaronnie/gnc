@@ -3,10 +3,13 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/kevwan/mapreduce"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -14,10 +17,8 @@ import (
 
 var (
 	ProtocolPorts []string
-
 	LifeCycleTime int // second
-
-	IsListen bool
+	IsListen      bool
 )
 
 type ProtocolPort struct {
@@ -36,17 +37,23 @@ func main() {
 
 	checkPorts := preprocessing(ProtocolPorts)
 
+	sig := make(chan os.Signal, 1)
 	if LifeCycleTime != 0 && IsListen {
 		time.AfterFunc(time.Duration(LifeCycleTime)*time.Second, func() {
-			os.Exit(0)
+			sig <- syscall.SIGQUIT
 		})
 	}
 
 	var conflictPorts []string
-
 	var listeners []Listener
 
-	for _, v := range checkPorts {
+	_ = mapreduce.MapReduceVoid(func(source chan<- interface{}) {
+		for _, v := range checkPorts {
+			source <- v
+		}
+	}, func(item interface{}, writer mapreduce.Writer, cancel func(error)) {
+		v := item.(ProtocolPort)
+
 		var listen net.Listener
 		var err error
 		switch v.Protocol {
@@ -56,14 +63,24 @@ func main() {
 			// todo
 		}
 		if err != nil {
-			conflictPorts = append(conflictPorts, v.Port)
+			writer.Write(v.Port)
 		} else {
-			listeners = append(listeners, Listener{
+			writer.Write(Listener{
 				Listener: listen,
 				Protocol: v.Protocol,
 			})
 		}
-	}
+	}, func(pipe <-chan interface{}, cancel func(error)) {
+		for v := range pipe {
+			if value, ok := v.(string); ok && value != "" {
+				conflictPorts = append(conflictPorts, value)
+			} else {
+				if value, ok := v.(Listener); ok {
+					listeners = append(listeners, value)
+				}
+			}
+		}
+	})
 
 	if len(conflictPorts) != 0 {
 		for _, v := range listeners {
@@ -85,11 +102,13 @@ func main() {
 			switch v.Protocol {
 			case "tcp":
 				_ = http.Serve(v.Listener, nil)
+			case "udp":
+				// todo
 			}
 		}()
 	}
 
-	select {}
+	signalHandler(listeners, sig)
 }
 
 func preprocessing(protoPorts []string) []ProtocolPort {
@@ -110,6 +129,25 @@ func preprocessing(protoPorts []string) []ProtocolPort {
 		})
 	}
 	return protocolPorts
+}
+
+func signalHandler(listeners []Listener, sig chan os.Signal) {
+	// signal handler
+	signal.Notify(sig, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
+	for {
+		s := <-sig
+		fmt.Println(fmt.Sprintf("get a signal %s", s.String()))
+		switch s {
+		case syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT:
+			for _, v := range listeners {
+				_ = v.Listener.Close()
+			}
+			fmt.Printf("close network successfully")
+			return
+		default:
+			return
+		}
+	}
 }
 
 func bindFlags() {
