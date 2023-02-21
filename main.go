@@ -35,7 +35,7 @@ type Listener struct {
 func main() {
 	bindFlags()
 
-	checkPorts := preprocessing(ProtocolPorts)
+	checkPorts := preprocessing()
 
 	sig := make(chan os.Signal, 1)
 	if LifeCycleTime != 0 && IsListen {
@@ -111,9 +111,9 @@ func main() {
 	signalHandler(listeners, sig)
 }
 
-func preprocessing(protoPorts []string) []ProtocolPort {
+func preprocessing() []ProtocolPort {
 	var protocolPorts []ProtocolPort
-	for _, v := range protoPorts {
+	for _, v := range ProtocolPorts {
 		var protocol, port string
 		split := strings.Split(v, "/")
 		if len(split) == 2 {
