@@ -31,8 +31,12 @@ conflict ports: 3000,9100
 ```shell
 gnc -lp 3000,8000
 
+gnc -lp 3000/tcp,8000/udp
+
 curl localhost:3000
 # output: success
+
+nc -u 127.0.0.1 8000
 ```
 
 ## 设置存活时间(单位秒)
