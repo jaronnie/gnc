@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/spf13/cast"
 	"net"
 	"net/http"
 	"os"
@@ -23,11 +24,11 @@ var (
 
 type ProtocolPort struct {
 	Protocol string
-	Port     string
+	Port     int
 }
 
 type Listener struct {
-	Listener net.Listener
+	Listener interface{}
 
 	Protocol string
 }
@@ -35,7 +36,11 @@ type Listener struct {
 func main() {
 	bindFlags()
 
-	checkPorts := preprocessing()
+	checkPorts, err := preprocessing()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 
 	sig := make(chan os.Signal, 1)
 	if LifeCycleTime != 0 && IsListen {
@@ -54,26 +59,30 @@ func main() {
 	}, func(item interface{}, writer mapreduce.Writer, cancel func(error)) {
 		v := item.(ProtocolPort)
 
-		var listen net.Listener
+		var listener interface{}
 		var err error
 		switch v.Protocol {
 		case "tcp":
-			listen, err = net.Listen("tcp", fmt.Sprintf(":%s", v.Port))
+			listener, err = net.Listen("tcp", fmt.Sprintf(":%d", v.Port))
 		case "udp":
-			// todo
+			addr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("0.0.0.0:%d", v.Port))
+			listener, err = net.ListenUDP("udp", addr)
+			if err != nil {
+				fmt.Println(err)
+			}
 		}
 		if err != nil {
 			writer.Write(v.Port)
 		} else {
 			writer.Write(Listener{
-				Listener: listen,
+				Listener: listener,
 				Protocol: v.Protocol,
 			})
 		}
 	}, func(pipe <-chan interface{}, cancel func(error)) {
 		for v := range pipe {
-			if value, ok := v.(string); ok && value != "" {
-				conflictPorts = append(conflictPorts, value)
+			if value, ok := v.(int); ok && value != 0 {
+				conflictPorts = append(conflictPorts, cast.ToString(v))
 			} else {
 				if value, ok := v.(Listener); ok {
 					listeners = append(listeners, value)
@@ -84,7 +93,12 @@ func main() {
 
 	if len(conflictPorts) != 0 {
 		for _, v := range listeners {
-			_ = v.Listener.Close()
+			switch v.Protocol {
+			case "tcp":
+				_ = v.Listener.(net.Listener).Close()
+			case "udp":
+				_ = v.Listener.(*net.UDPConn).Close()
+			}
 		}
 		fmt.Printf("conflict ports: %s", strings.Join(conflictPorts, ","))
 		return
@@ -101,9 +115,25 @@ func main() {
 		go func() {
 			switch v.Protocol {
 			case "tcp":
-				_ = http.Serve(v.Listener, nil)
+				_ = http.Serve(v.Listener.(net.Listener), nil)
 			case "udp":
-				// todo
+				for {
+					data := make([]byte, 1024)
+					_, rAddr, err := v.Listener.(*net.UDPConn).ReadFromUDP(data)
+					if err != nil {
+						sig <- syscall.SIGQUIT
+						return
+					}
+					strData := string(data)
+					fmt.Print("Received:", strData)
+
+					_, err = v.Listener.(*net.UDPConn).WriteToUDP([]byte(strData), rAddr)
+					if err != nil {
+						sig <- syscall.SIGQUIT
+						return
+					}
+					fmt.Print("Send:", strData)
+				}
 			}
 		}()
 	}
@@ -111,7 +141,7 @@ func main() {
 	signalHandler(listeners, sig)
 }
 
-func preprocessing() []ProtocolPort {
+func preprocessing() ([]ProtocolPort, error) {
 	var protocolPorts []ProtocolPort
 	for _, v := range ProtocolPorts {
 		var protocol, port string
@@ -123,12 +153,18 @@ func preprocessing() []ProtocolPort {
 			port = split[0]
 			protocol = "tcp"
 		}
+
+		portInt, err := cast.ToIntE(port)
+		if err != nil {
+			return nil, err
+		}
+
 		protocolPorts = append(protocolPorts, ProtocolPort{
 			Protocol: protocol,
-			Port:     port,
+			Port:     portInt,
 		})
 	}
-	return protocolPorts
+	return protocolPorts, nil
 }
 
 func signalHandler(listeners []Listener, sig chan os.Signal) {
@@ -140,7 +176,12 @@ func signalHandler(listeners []Listener, sig chan os.Signal) {
 		switch s {
 		case syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT:
 			for _, v := range listeners {
-				_ = v.Listener.Close()
+				switch v.Protocol {
+				case "tcp":
+					_ = v.Listener.(net.Listener).Close()
+				case "udp":
+					_ = v.Listener.(*net.UDPConn).Close()
+				}
 			}
 			fmt.Printf("close network successfully")
 			return
