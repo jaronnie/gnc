@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/kevwan/mapreduce"
 	"net"
 	"net/http"
 	"os"
@@ -12,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kevwan/mapreduce"
 	"github.com/spf13/pflag"
 )
 
