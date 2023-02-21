@@ -172,7 +172,7 @@ func signalHandler(listeners []Listener, sig chan os.Signal) {
 	signal.Notify(sig, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
 	for {
 		s := <-sig
-		fmt.Println(fmt.Sprintf("get a signal %s", s.String()))
+		fmt.Printf("get a signal %s\n", s.String())
 		switch s {
 		case syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT:
 			for _, v := range listeners {
