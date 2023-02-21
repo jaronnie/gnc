@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/spf13/cast"
 	"net"
 	"net/http"
 	"os"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kevwan/mapreduce"
+	"github.com/spf13/cast"
 	"github.com/spf13/pflag"
 )
 
